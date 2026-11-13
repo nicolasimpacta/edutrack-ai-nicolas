@@ -9,9 +9,10 @@ st.set_page_config(page_title="Perfil - EduTrack AI", page_icon="👤", layout="
 
 
 def load_environment() -> str:
-    """Load environment variables from .env file at the project root."""
+    """Load environment variables directly from .env file at the project root."""
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     env_path = os.path.join(root_dir, ".env")
+    env_vars = {}
     if os.path.exists(env_path):
         with open(env_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -20,9 +21,9 @@ def load_environment() -> str:
                     key, val = line.split("=", 1)
                     key = key.strip()
                     val = val.strip().strip("'\"")
-                    if key not in os.environ:
-                        os.environ[key] = val
-    return os.getenv("XANO_API_BASE_URL", "https://x8ki-letl-twmt.n7.xano.io/api:ekZgtqK5")
+                    env_vars[key] = val
+                    os.environ[key] = val
+    return env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_API_BASE_URL", "")
 
 
 def is_valid_email(email: str) -> bool:
@@ -37,7 +38,6 @@ def format_created_at(timestamp_value) -> str:
         return "Não informado"
     try:
         if isinstance(timestamp_value, (int, float)):
-            # Convert milliseconds to seconds if needed
             if timestamp_value > 1e11:
                 timestamp_value = timestamp_value / 1000
             return datetime.fromtimestamp(timestamp_value).strftime("%d/%m/%Y às %H:%M")
@@ -68,6 +68,7 @@ def signup_user(base_url: str, name: str, email: str, password: str) -> tuple[bo
 def login_user(base_url: str, email: str, password: str) -> tuple[bool, dict | str]:
     """Authenticate an existing student using auth/login."""
     endpoint_url = f"{base_url.rstrip('/')}/auth/login"
+    print("[DEBUG] Login Endpoint URL:", endpoint_url)
     payload = {
         "email": email.strip().lower(),
         "password": password
@@ -94,9 +95,14 @@ def fetch_user_profile(base_url: str, auth_token: str) -> tuple[bool, dict | str
         data = response.json() if response.content else {}
         if response.status_code == 200:
             return True, data
+        # Fallback to existing session user_info if available
+        if st.session_state.get("user_info"):
+            return True, st.session_state["user_info"]
         error_msg = data.get("error") or data.get("message") or "Sessão inválida ou expirada."
         return False, error_msg
     except requests.exceptions.RequestException as exc:
+        if st.session_state.get("user_info"):
+            return True, st.session_state["user_info"]
         return False, f"Falha na conexão com o servidor Xano: {exc}"
 
 
@@ -145,7 +151,6 @@ if st.session_state["auth_token"] and st.session_state["user_info"]:
 
     st.markdown("---")
 
-    # Action Buttons (Refresh & Logout)
     btn_col1, btn_col2, _ = st.columns([1, 1, 3])
     with btn_col1:
         if st.button("🔄 Atualizar Perfil", use_container_width=True):
@@ -166,7 +171,6 @@ if st.session_state["auth_token"] and st.session_state["user_info"]:
             st.rerun()
 
 else:
-    # Unauthenticated View: Login and Signup tabs
     st.title("👤 Identificação do Usuário")
     st.write("Faça login para acessar suas informações ou crie uma conta no EduTrack AI.")
 
@@ -193,17 +197,19 @@ else:
                         if success:
                             token = result.get("authToken")
                             st.session_state["auth_token"] = token
-                            # Fetch user profile data
-                            ok_profile, profile_data = fetch_user_profile(api_base_url, token)
-                            if ok_profile:
-                                st.session_state["user_info"] = profile_data
+                            if result.get("user") and isinstance(result.get("user"), dict):
+                                st.session_state["user_info"] = result.get("user")
                             else:
-                                st.session_state["user_info"] = {
-                                    "id": result.get("user_id"),
-                                    "name": "Estudante",
-                                    "email": login_email.strip().lower(),
-                                    "role": "member",
-                                }
+                                ok_profile, profile_data = fetch_user_profile(api_base_url, token)
+                                if ok_profile:
+                                    st.session_state["user_info"] = profile_data
+                                else:
+                                    st.session_state["user_info"] = {
+                                        "id": result.get("user_id"),
+                                        "name": "Estudante",
+                                        "email": login_email.strip().lower(),
+                                        "role": "member",
+                                    }
                             st.success("Login efetuado com sucesso!")
                             st.rerun()
                         else:
@@ -238,23 +244,24 @@ else:
                         if success:
                             token = result.get("authToken")
                             st.session_state["auth_token"] = token
-                            # Fetch user profile data
-                            ok_profile, profile_data = fetch_user_profile(api_base_url, token)
-                            if ok_profile:
-                                st.session_state["user_info"] = profile_data
+                            if result.get("user") and isinstance(result.get("user"), dict):
+                                st.session_state["user_info"] = result.get("user")
                             else:
-                                st.session_state["user_info"] = {
-                                    "id": result.get("user_id"),
-                                    "name": signup_name.strip(),
-                                    "email": signup_email.strip().lower(),
-                                    "role": "member",
-                                }
+                                ok_profile, profile_data = fetch_user_profile(api_base_url, token)
+                                if ok_profile:
+                                    st.session_state["user_info"] = profile_data
+                                else:
+                                    st.session_state["user_info"] = {
+                                        "id": result.get("user_id"),
+                                        "name": signup_name.strip(),
+                                        "email": signup_email.strip().lower(),
+                                        "role": "member",
+                                    }
                             st.success("Cadastro realizado com sucesso! Você já está autenticado.")
                             st.rerun()
                         else:
                             st.error(f"Erro no cadastro: {result}")
 
-# Connection configuration info for developers
 with st.expander("⚙️ Detalhes da Conexão Xano", expanded=False):
     st.caption("A URL base é configurada no arquivo `.env` na raiz do projeto (`XANO_API_BASE_URL`).")
     st.code(f"XANO_API_BASE_URL = {api_base_url}", language="env")

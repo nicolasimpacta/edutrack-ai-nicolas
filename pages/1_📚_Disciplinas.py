@@ -1,27 +1,20 @@
 import os
+import sys
 import requests
 import streamlit as st
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from config import load_xano_urls
 
 st.set_page_config(page_title="Disciplinas - EduTrack AI", page_icon="📚", layout="wide")
 
 
 def load_environment() -> str:
-    """Load Xano API base URL directly from root .env without hardcoded defaults."""
-    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env_path = os.path.join(root_dir, ".env")
-    env_vars = {}
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, val = line.split("=", 1)
-                    key = key.strip()
-                    val = val.strip().strip("'\"")
-                    val = val.strip().strip("'\"")
-                    env_vars[key] = val
-                    os.environ[key] = val
-    return env_vars.get("XANO_SUBJECTS_API_URL") or env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_SUBJECTS_API_URL") or os.getenv("XANO_API_BASE_URL", "")
+    """Load Xano subjects API base URL from Streamlit secrets with env fallback."""
+    return load_xano_urls()["subjects"]
 
 
 api_base_url = load_environment()

@@ -1,28 +1,22 @@
 import json
 import os
+import sys
 import requests
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from config import load_xano_urls
 
 
 def load_environment() -> dict:
-    """Load API base URLs directly from root .env without hardcoded defaults."""
-    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env_path = os.path.join(root_dir, ".env")
-    env_vars = {}
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, val = line.split("=", 1)
-                    key = key.strip()
-                    val = val.strip().strip("'\"")
-                    env_vars[key] = val
-                    os.environ[key] = val
-
+    """Load API base URLs from Streamlit secrets with environment variable fallback."""
+    urls = load_xano_urls()
     return {
-        "api_base_url": env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_API_BASE_URL", ""),
-        "subjects_api_url": env_vars.get("XANO_SUBJECTS_API_URL") or env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_SUBJECTS_API_URL", ""),
-        "tasks_api_url": env_vars.get("XANO_TASKS_API_URL") or env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_TASKS_API_URL", "")
+        "api_base_url": urls["base"],
+        "subjects_api_url": urls["subjects"],
+        "tasks_api_url": urls["tasks"],
     }
 
 
@@ -154,8 +148,8 @@ def fetch_and_calculate_subject_progress(
     
     :param subject_id: ID of the subject to calculate progress for
     :param auth_token: Bearer auth token for Xano
-    :param subjects_api_url: Base URL for subjects CRUD (optional, reads from .env)
-    :param tasks_api_url: Base URL for tasks CRUD (optional, reads from .env)
+    :param subjects_api_url: Base URL for subjects CRUD (optional, reads from Streamlit secrets / env)
+    :param tasks_api_url: Base URL for tasks CRUD (optional, reads from Streamlit secrets / env)
     :param as_json: If True, returns JSON string; if False, returns dict
     :return: JSON string or dict with progress metrics
     """

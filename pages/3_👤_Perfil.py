@@ -10,6 +10,8 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+from config import load_xano_urls
+
 try:
     from reports.generate_report import generate_performance_pdf
     PDF_LIB_AVAILABLE = True
@@ -22,25 +24,8 @@ st.set_page_config(page_title="Perfil - EduTrack AI", page_icon="👤", layout="
 
 
 def load_environment() -> dict[str, str]:
-    """Load environment variables directly from .env file at the project root."""
-    env_path = os.path.join(ROOT_DIR, ".env")
-    env_vars = {}
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, val = line.split("=", 1)
-                    key = key.strip()
-                    val = val.strip().strip("'\"")
-                    env_vars[key] = val
-                    os.environ[key] = val
-    return {
-        "base": env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_API_BASE_URL", ""),
-        "subjects": env_vars.get("XANO_SUBJECTS_API_URL") or env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_SUBJECTS_API_URL") or os.getenv("XANO_API_BASE_URL", ""),
-        "tasks": env_vars.get("XANO_TASKS_API_URL") or env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_TASKS_API_URL") or os.getenv("XANO_API_BASE_URL", ""),
-        "reports": env_vars.get("XANO_REPORTS_API_URL") or os.getenv("XANO_REPORTS_API_URL", ""),
-    }
+    """Load Xano API base URLs from Streamlit secrets with environment variable fallback."""
+    return load_xano_urls()
 
 
 def is_valid_email(email: str) -> bool:
@@ -127,7 +112,7 @@ def fetch_report_data(env_urls: dict[str, str], auth_token: str, fallback_user: 
     """Fetch student, subjects, and tasks data for the PDF report from Xano."""
     headers = {"Authorization": f"Bearer {auth_token}"}
 
-    # 1. Try dedicated reports endpoint if configured in .env (XANO_REPORTS_API_URL)
+    # 1. Try dedicated reports endpoint if configured in Streamlit secrets (XANO_REPORTS_API_URL)
     reports_url = env_urls.get("reports", "").strip()
     if reports_url:
         try:
@@ -395,6 +380,6 @@ else:
                             st.error(f"Erro no cadastro: {result}")
 
 with st.expander("⚙️ Detalhes da Conexão Xano", expanded=False):
-    st.caption("A URL base é configurada no arquivo `.env` na raiz do projeto (`XANO_API_BASE_URL`).")
-    st.code(f"XANO_API_BASE_URL = {api_base_url}", language="env")
+    st.caption("A URL base é configurada em `.streamlit/secrets.toml` (`st.secrets`, chave `XANO_API_BASE_URL`).")
+    st.code(f'XANO_API_BASE_URL = "{api_base_url}"', language="toml")
 

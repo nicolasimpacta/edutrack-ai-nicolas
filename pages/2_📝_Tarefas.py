@@ -1,31 +1,23 @@
 import os
+import sys
 import time
 from datetime import date, datetime
 import requests
 import streamlit as st
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from config import load_xano_urls
+
 st.set_page_config(page_title="Tarefas - EduTrack AI", page_icon="📝", layout="wide")
 
 
 def load_environment() -> tuple[str, str]:
-    """Load API base URLs for tasks and subjects directly from root .env."""
-    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env_path = os.path.join(root_dir, ".env")
-    env_vars = {}
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, val = line.split("=", 1)
-                    key = key.strip()
-                    val = val.strip().strip("'\"")
-                    env_vars[key] = val
-                    os.environ[key] = val
-
-    tasks_url = env_vars.get("XANO_TASKS_API_URL") or env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_TASKS_API_URL") or os.getenv("XANO_API_BASE_URL", "")
-    subjects_url = env_vars.get("XANO_SUBJECTS_API_URL") or env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_SUBJECTS_API_URL") or os.getenv("XANO_API_BASE_URL", "")
-    return tasks_url, subjects_url
+    """Load API base URLs for tasks and subjects from Streamlit secrets with env fallback."""
+    urls = load_xano_urls()
+    return urls["tasks"], urls["subjects"]
 
 
 tasks_api_url, subjects_api_url = load_environment()

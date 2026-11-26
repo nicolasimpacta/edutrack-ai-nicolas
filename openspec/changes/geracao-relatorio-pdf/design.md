@@ -8,8 +8,9 @@ Veja a motivação detalhada em `proposal.md`.
 ## Goals / Non-Goals
 
 **Goals:**
-- Implementar script Python utilitário para compilar o desempenho acadêmico do aluno e exportar para arquivo PDF formatado.
-- Definir endpoint no Xano (via XanoScript) para permitir o download do arquivo de relatório sob autenticação do usuário.
+- Implementar script Python utilitário (`reports/generate_report.py`) para compilar o desempenho acadêmico do aluno e exportar para arquivo PDF formatado.
+- Integrar a geração e download do PDF no Streamlit (`pages/3_👤_Perfil.py`) com botão `"📄 Gerar Relatório PDF"` e `st.download_button`.
+- Definir endpoint no Xano (via XanoScript) para fornecer os dados consolidados do relatório sob autenticação do usuário.
 
 **Non-Goals:**
 - Cálculos complexos de notas/avaliações que não constam no esquema atual do banco de dados.
@@ -29,9 +30,13 @@ O documento PDF conterá:
 - **Seção de Disciplinas**: Tabela listando nome, professor e carga horária.
 - **Seção de Tarefas Acadêmicas**: Tabela com título, matéria vinculada, prazo e status (Pendente / Concluída).
 
-### 3. Endpoint no Xano para Download
-- **Decisão**: Definir endpoint `GET /reports/download` (ou `GET /reports/performance`) no grupo de API em XanoScript.
+### 3. Endpoint no Xano para Dados do Relatório
+- **Decisão**: Definir endpoint `GET /reports/download` no grupo de API `"Student Reports"` em XanoScript (`api/reports/download_GET.xs`) retornando JSON com `student`, `subjects` e `tasks`.
 - **Segurança**: Exigir `auth = "user"` com filtro obrigatório por `$auth.id` para impedir acesso a dados de outros alunos.
+
+### 4. Integração no Streamlit (`pages/3_👤_Perfil.py`)
+- **Decisão**: Exibir a seção de geração de relatório na área autenticada de `pages/3_👤_Perfil.py`, utilizando o botão `"📄 Gerar Relatório PDF"` e `st.download_button`.
+- **Estratégia de Dados**: Se `XANO_REPORTS_API_URL` estiver configurada no `.env`, consome `GET /reports/download`; caso contrário (antes do push manual do grupo `Student Reports`), busca os dados nos endpoints já ativos (`/subjects` e `/academic_tasks`) usando o `auth_token` da sessão.
 
 ## Risks / Trade-offs
 

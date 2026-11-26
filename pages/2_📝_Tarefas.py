@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import date, datetime
 import requests
 import streamlit as st
@@ -63,11 +64,13 @@ def format_date_br(parsed_date: date | None) -> str:
     return "Sem prazo"
 
 
+@st.cache_data(ttl=10, show_spinner=False)
 def fetch_subjects(base_url: str, token: str) -> list[dict]:
     """Fetch user's subjects to associate tasks with course names."""
     url = f"{base_url.rstrip('/')}/subjects"
     headers = {"Authorization": f"Bearer {token}"}
     try:
+        time.sleep(0.3)
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
@@ -77,94 +80,104 @@ def fetch_subjects(base_url: str, token: str) -> list[dict]:
     return []
 
 
+@st.cache_data(ttl=10, show_spinner=False)
 def fetch_tasks(base_url: str, token: str, subjects: list[dict]) -> tuple[bool, list | str]:
-    """Fetch all academic tasks for the student across their subjects."""
+    """Fetch all academic tasks for the student."""
     headers = {"Authorization": f"Bearer {token}"}
-
-    # 1. First attempt direct query without params (supports generic /tasks or unparameterized endpoints)
-    for ep in ["/academic_tasks", "/tasks"]:
-        url = f"{base_url.rstrip('/')}{ep}"
-        try:
-            resp = requests.get(url, headers=headers, timeout=5)
-            if resp.status_code == 200 and isinstance(resp.json(), list):
-                return True, resp.json()
-            elif resp.status_code == 401:
-                return False, "unauthorized"
-        except requests.exceptions.RequestException:
-            pass
-
-    # 2. For Xano endpoints requiring subject_id and status query params
-    tasks_by_id = {}
-    statuses = ["pending", "completed", "in_progress", "Pendente", "Concluída"]
     url = f"{base_url.rstrip('/')}/academic_tasks"
-
-    # Query per subject
-    subject_ids = [s.get("id") for s in subjects if s.get("id") is not None]
-    if 0 not in subject_ids:
-        subject_ids.append(0)  # Check unlinked tasks if any
+    
+    tasks_by_id = {}
+    
+    # O Xano exige 'subject_id' E 'status' para listar as tarefas.
+    # Vamos varrer todas as matérias do usuário.
+    if not subjects:
+        return True, []
 
     try:
-        for sid in subject_ids:
-            for st_val in statuses:
-                params = {"subject_id": sid, "status": st_val}
-                r = requests.get(url, headers=headers, params=params, timeout=5)
-                if r.status_code == 200:
-                    data = r.json()
+        for subject in subjects:
+            sid = subject.get("id")
+            if not sid:
+                continue
+                
+            # Para cada matéria, buscamos pendentes e concluídas
+            for status_val in ["pending", "completed"]:
+                params = {"subject_id": sid, "status": status_val}
+                time.sleep(0.3) # Respiro para não estourar o limite do Xano
+                
+                resp = requests.get(url, headers=headers, params=params, timeout=10)
+                
+                if resp.status_code == 200:
+                    data = resp.json()
                     if isinstance(data, list):
                         for item in data:
                             tasks_by_id[item.get("id")] = item
-                elif r.status_code == 401:
+                elif resp.status_code == 401:
                     return False, "unauthorized"
+                elif resp.status_code == 429:
+                    return False, "O Xano bloqueou por excesso de requisições. Aguarde 1 minuto e recarregue."
+                elif resp.status_code != 200:
+                    # Se der erro 400 (ex: status inválido), a gente ignora e tenta o próximo
+                    pass 
+                    
         return True, list(tasks_by_id.values())
+            
     except requests.exceptions.RequestException as exc:
         return False, f"Erro de conexão com Xano: {exc}"
 
 
 def create_task(base_url: str, token: str, title: str, subject_id: int, due_date_val: str | None, status: str, description: str) -> tuple[bool, str | dict]:
     """Create a new academic task linked to a subject."""
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {
+        "Authorization": f"Bearer {token}" if token else "",
+        "Content-Type": "application/json"
+    }
+    
     payload = {
         "title": title.strip(),
         "description": description.strip() if description.strip() else "",
         "due_date": due_date_val,
         "status": status,
-        "subject_id": int(subject_id),
-        "deadline": due_date_val  # alias for backward compatibility
+        "subject_id": int(subject_id)
     }
 
     url = f"{base_url.rstrip('/')}/academic_tasks"
+    
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=10)
+        
+        if response.status_code == 429:
+            return False, "O Xano bloqueou por excesso de requisições. Aguarde 1 minuto e tente novamente."
         if response.status_code == 404:
-            url_alt = f"{base_url.rstrip('/')}/tasks"
-            response = requests.post(url_alt, headers=headers, json=payload, timeout=10)
+            return False, f"Erro 404. URL tentada: {url}. Token: {token[:5]}..."
 
         data = response.json() if response.content else {}
-        if response.status_code == 200:
+        if response.status_code in [200, 201]:
             return True, data
+            
         err = data.get("error") or data.get("message") or f"Falha na criação ({response.status_code})"
         return False, err
+        
     except requests.exceptions.RequestException as exc:
         return False, f"Erro de conexão com Xano: {exc}"
 
 
 def update_task_status(base_url: str, token: str, task: dict, new_status: str) -> tuple[bool, str]:
-    """Update the status of an academic task sending all required payload fields."""
+    """Update the status of an academic task."""
     task_id = task.get("id")
     url = f"{base_url.rstrip('/')}/academic_tasks/{task_id}"
     headers = {"Authorization": f"Bearer {token}"}
+    
     payload = {
         "title": task.get("title", ""),
         "description": task.get("description") or "",
-        "due_date": task.get("due_date") or task.get("deadline"),
+        "due_date": task.get("due_date"), 
         "status": new_status,
         "subject_id": task.get("subject_id")
     }
     try:
         response = requests.patch(url, headers=headers, json=payload, timeout=10)
-        if response.status_code == 404:
-            url_alt = f"{base_url.rstrip('/')}/tasks/{task_id}"
-            response = requests.patch(url_alt, headers=headers, json=payload, timeout=10)
+        if response.status_code == 429:
+            return False, "O Xano bloqueou por excesso de requisições. Aguarde 1 minuto."
 
         if response.status_code == 200:
             return True, "Status atualizado com sucesso."
@@ -181,9 +194,8 @@ def delete_task(base_url: str, token: str, task_id: int) -> tuple[bool, str]:
     headers = {"Authorization": f"Bearer {token}"}
     try:
         response = requests.delete(url, headers=headers, timeout=10)
-        if response.status_code == 404:
-            url_alt = f"{base_url.rstrip('/')}/tasks/{task_id}"
-            response = requests.delete(url_alt, headers=headers, timeout=10)
+        if response.status_code == 429:
+            return False, "O Xano bloqueou por excesso de requisições. Aguarde 1 minuto."
 
         if response.status_code == 200:
             return True, "Tarefa removida com sucesso."
@@ -293,6 +305,7 @@ with tab_list:
                             with st.spinner("Atualizando status..."):
                                 ok, msg = update_task_status(tasks_api_url, auth_token, task, "completed")
                                 if ok:
+                                    st.cache_data.clear() # Limpa o cache para atualizar a tela
                                     st.success("Tarefa concluída!")
                                     st.rerun()
                                 else:
@@ -302,6 +315,7 @@ with tab_list:
                             with st.spinner("Atualizando status..."):
                                 ok, msg = update_task_status(tasks_api_url, auth_token, task, "pending")
                                 if ok:
+                                    st.cache_data.clear()
                                     st.info("Tarefa reaberta como pendente.")
                                     st.rerun()
                                 else:
@@ -312,6 +326,7 @@ with tab_list:
                         with st.spinner("Removendo..."):
                             del_ok, del_msg = delete_task(tasks_api_url, auth_token, t_id)
                             if del_ok:
+                                st.cache_data.clear()
                                 st.success("Tarefa removida!")
                                 st.rerun()
                             else:
@@ -365,7 +380,9 @@ with tab_new:
                             form_desc
                         )
                         if task_ok:
+                            st.cache_data.clear() # Limpa o cache para a nova tarefa aparecer
                             st.success(f"Tarefa '{form_title}' cadastrada com sucesso!")
+                            time.sleep(1) # Espera 1 segundo para o Xano processar
                             st.rerun()
                         else:
                             st.error(f"Erro ao salvar tarefa: {res}")

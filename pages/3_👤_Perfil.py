@@ -1,17 +1,29 @@
 import os
 import re
+import sys
+import time
 from datetime import datetime
 import requests
 import streamlit as st
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+try:
+    from reports.generate_report import generate_performance_pdf
+    PDF_LIB_AVAILABLE = True
+except ModuleNotFoundError:
+    generate_performance_pdf = None
+    PDF_LIB_AVAILABLE = False
 
 # Page Configuration
 st.set_page_config(page_title="Perfil - EduTrack AI", page_icon="👤", layout="wide")
 
 
-def load_environment() -> str:
+def load_environment() -> dict[str, str]:
     """Load environment variables directly from .env file at the project root."""
-    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env_path = os.path.join(root_dir, ".env")
+    env_path = os.path.join(ROOT_DIR, ".env")
     env_vars = {}
     if os.path.exists(env_path):
         with open(env_path, "r", encoding="utf-8") as f:
@@ -23,7 +35,12 @@ def load_environment() -> str:
                     val = val.strip().strip("'\"")
                     env_vars[key] = val
                     os.environ[key] = val
-    return env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_API_BASE_URL", "")
+    return {
+        "base": env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_API_BASE_URL", ""),
+        "subjects": env_vars.get("XANO_SUBJECTS_API_URL") or env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_SUBJECTS_API_URL") or os.getenv("XANO_API_BASE_URL", ""),
+        "tasks": env_vars.get("XANO_TASKS_API_URL") or env_vars.get("XANO_API_BASE_URL") or os.getenv("XANO_TASKS_API_URL") or os.getenv("XANO_API_BASE_URL", ""),
+        "reports": env_vars.get("XANO_REPORTS_API_URL") or os.getenv("XANO_REPORTS_API_URL", ""),
+    }
 
 
 def is_valid_email(email: str) -> bool:
@@ -106,6 +123,73 @@ def fetch_user_profile(base_url: str, auth_token: str) -> tuple[bool, dict | str
         return False, f"Falha na conexão com o servidor Xano: {exc}"
 
 
+def fetch_report_data(env_urls: dict[str, str], auth_token: str, fallback_user: dict) -> tuple[bool, dict | str]:
+    """Fetch student, subjects, and tasks data for the PDF report from Xano."""
+    headers = {"Authorization": f"Bearer {auth_token}"}
+
+    # 1. Try dedicated reports endpoint if configured in .env (XANO_REPORTS_API_URL)
+    reports_url = env_urls.get("reports", "").strip()
+    if reports_url:
+        try:
+            resp = requests.get(f"{reports_url.rstrip('/')}/reports/download", headers=headers, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                return True, {
+                    "student": data.get("student") or fallback_user,
+                    "subjects": data.get("subjects") or [],
+                    "tasks": data.get("tasks") or [],
+                }
+            if resp.status_code == 401:
+                return False, "Sessão expirada. Faça login novamente."
+        except requests.exceptions.RequestException:
+            pass
+
+    # 2. Fallback: assemble report data from existing live Xano endpoints (/subjects and /academic_tasks)
+    subjects_url = env_urls.get("subjects", "").strip()
+    tasks_url = env_urls.get("tasks", "").strip()
+    subjects: list[dict] = []
+    tasks_by_id: dict = {}
+
+    try:
+        if subjects_url:
+            resp_subj = requests.get(f"{subjects_url.rstrip('/')}/subjects", headers=headers, timeout=10)
+            if resp_subj.status_code == 401:
+                return False, "Sessão expirada. Faça login novamente."
+            if resp_subj.status_code == 200:
+                raw_subj = resp_subj.json()
+                if isinstance(raw_subj, list):
+                    subjects = raw_subj
+
+        if tasks_url and subjects:
+            for subj in subjects:
+                sid = subj.get("id")
+                if not sid:
+                    continue
+                for status_val in ["pending", "completed"]:
+                    time.sleep(0.25)
+                    resp_task = requests.get(
+                        f"{tasks_url.rstrip('/')}/academic_tasks",
+                        headers=headers,
+                        params={"subject_id": sid, "status": status_val},
+                        timeout=10,
+                    )
+                    if resp_task.status_code == 401:
+                        return False, "Sessão expirada. Faça login novamente."
+                    if resp_task.status_code == 200:
+                        raw_tasks = resp_task.json()
+                        if isinstance(raw_tasks, list):
+                            for item in raw_tasks:
+                                tasks_by_id[item.get("id")] = item
+
+        return True, {
+            "student": fallback_user,
+            "subjects": subjects,
+            "tasks": list(tasks_by_id.values()),
+        }
+    except requests.exceptions.RequestException as exc:
+        return False, f"Falha na conexão com o servidor Xano: {exc}"
+
+
 # Initialize Session State
 if "auth_token" not in st.session_state:
     st.session_state["auth_token"] = None
@@ -113,8 +197,9 @@ if "auth_token" not in st.session_state:
 if "user_info" not in st.session_state:
     st.session_state["user_info"] = None
 
-# Retrieve Base URL
-api_base_url = load_environment()
+# Retrieve Base URLs
+env_urls = load_environment()
+api_base_url = env_urls["base"]
 
 # Check Authentication Status
 if st.session_state["auth_token"] and st.session_state["user_info"]:
@@ -167,8 +252,55 @@ if st.session_state["auth_token"] and st.session_state["user_info"]:
         if st.button("🚪 Sair da Conta", type="secondary", use_container_width=True):
             st.session_state["auth_token"] = None
             st.session_state["user_info"] = None
+            st.session_state.pop("report_pdf_bytes", None)
+            st.session_state.pop("report_pdf_summary", None)
             st.success("Sessão encerrada com sucesso.")
             st.rerun()
+
+    st.markdown("---")
+    st.subheader("📄 Relatório de Desempenho Acadêmico")
+    st.write("Gere e baixe um documento PDF consolidado com seu perfil, disciplinas matriculadas e status das tarefas.")
+
+    if not PDF_LIB_AVAILABLE:
+        st.warning("Biblioteca `fpdf2` não encontrada no ambiente Python atual. Execute `pip install -r requirements.txt` para habilitar a geração de PDF.")
+    elif st.button("📄 Gerar Relatório PDF", type="primary"):
+        with st.spinner("Buscando dados no Xano e gerando relatório PDF..."):
+            ok_rep, rep_result = fetch_report_data(env_urls, st.session_state["auth_token"], user)
+            if ok_rep:
+                pdf_bytes = generate_performance_pdf(
+                    student_info=rep_result["student"],
+                    subjects=rep_result["subjects"],
+                    tasks=rep_result["tasks"],
+                )
+                tasks_list = rep_result["tasks"]
+                completed_total = sum(
+                    1 for t in tasks_list
+                    if str(t.get("status", "")).lower() in ["completed", "concluida", "concluída"]
+                )
+                st.session_state["report_pdf_bytes"] = pdf_bytes
+                st.session_state["report_pdf_summary"] = {
+                    "subjects": len(rep_result["subjects"]),
+                    "pending": len(tasks_list) - completed_total,
+                    "completed": completed_total,
+                }
+                st.success("Relatório PDF gerado com sucesso! Clique abaixo para fazer o download.")
+            else:
+                st.error(f"Não foi possível gerar o relatório: {rep_result}")
+
+    if st.session_state.get("report_pdf_bytes"):
+        summary = st.session_state.get("report_pdf_summary", {})
+        st.caption(
+            f"Resumo incluído no PDF: **{summary.get('subjects', 0)}** disciplina(s), "
+            f"**{summary.get('pending', 0)}** tarefa(s) pendente(s) e "
+            f"**{summary.get('completed', 0)}** concluída(s)."
+        )
+        st.download_button(
+            label="⬇️ Baixar Relatório PDF",
+            data=st.session_state["report_pdf_bytes"],
+            file_name="relatorio_desempenho_edutrack.pdf",
+            mime="application/pdf",
+            use_container_width=False,
+        )
 
 else:
     st.title("👤 Identificação do Usuário")

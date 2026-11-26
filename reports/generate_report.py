@@ -58,6 +58,26 @@ def sanitize_text(text: str | None) -> str:
     return cleaned.encode("ascii", errors="replace").decode("ascii")
 
 
+def format_due_date_br(date_val) -> str:
+    """Format a due_date value (timestamp or ISO date string) to DD/MM/YYYY."""
+    if not date_val:
+        return "Sem prazo"
+    try:
+        if isinstance(date_val, (int, float)):
+            ts = date_val / 1000 if date_val > 1e11 else date_val
+            return datetime.fromtimestamp(ts).strftime("%d/%m/%Y")
+        date_str = str(date_val).strip()
+        if date_str.isdigit() and len(date_str) >= 10:
+            ts_num = int(date_str)
+            ts = ts_num / 1000 if ts_num > 1e11 else ts_num
+            return datetime.fromtimestamp(ts).strftime("%d/%m/%Y")
+        if len(date_str) >= 10 and date_str[4] == "-" and date_str[7] == "-":
+            return datetime.strptime(date_str[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+        return sanitize_text(date_str)
+    except Exception:
+        return sanitize_text(str(date_val))
+
+
 def generate_performance_pdf(
     student_info: dict,
     subjects: list[dict],
@@ -203,10 +223,16 @@ def generate_performance_pdf(
     if not tasks:
         pdf.cell(190, 7, "Nenhuma tarefa academica registrada.", border=1, align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     else:
+        subjects_by_id = {
+            s.get("id"): s.get("name")
+            for s in subjects
+            if isinstance(s, dict) and s.get("id") is not None
+        }
         for t in tasks:
             t_title = sanitize_text(t.get("title", "Sem titulo"))
-            t_subject = sanitize_text(t.get("subject_name", "Geral"))
-            t_date = sanitize_text(t.get("due_date") or t.get("deadline") or "Sem prazo")
+            raw_subject = t.get("subject_name") or subjects_by_id.get(t.get("subject_id")) or "Geral"
+            t_subject = sanitize_text(raw_subject)
+            t_date = format_due_date_br(t.get("due_date") or t.get("deadline"))
             t_status_raw = str(t.get("status", "pending")).lower()
 
             if t_status_raw in ["completed", "concluida", "concluída"]:
